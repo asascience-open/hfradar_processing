@@ -2,6 +2,7 @@ import re
 import sys
 import logging
 import io
+from datetime import datetime
 import urllib.parse
 import boto3
 
@@ -14,7 +15,20 @@ def output_files(bucket: str, site: str, measurement_type: str, filename: str,
     is_footer = False
     for line in file_handle:
         # match headers
-        if not re.match(r"( |%%\s+(Longitude|\(deg\)))", line):
+        if maybe_match_ts := re.match(r"%TimeStamp: (\d{4} \d{2} \d{2}"
+                                    r"  \d{2} \d{2} \d{2})",
+                                    line):
+            timestamp_str = maybe_match_ts.group(1)
+            logging.info(f"timestamp_str is {timestamp_str}")
+        elif maybe_match_tz := re.match(r'%TimeZone: "([^"]+)', line):
+            timezone_str = maybe_match_tz.group(1)
+            logging.info(f"timezone_str is {timezone_str}")
+            timestamp_with_tz_string = str(datetime.strptime(f"{timestamp_str} "
+                                                             f"{timezone_str}",
+                                                             "%Y %m %d  "
+                                                             "%H %M %S %Z"))
+
+        elif not re.match(r"( |%%\s+(Longitude|\(deg\)))", line):
             header_footer_lines[is_footer].append(line)
         else:
             # switch to footer once returning back to comments, etc
@@ -22,16 +36,19 @@ def output_files(bucket: str, site: str, measurement_type: str, filename: str,
             if not line.startswith("%%"):
                 processed_line = re.sub("(?<![A-Z])\s+(?!$)", ",", line.strip()
                                         + "\n")
+                data_lines.append(f"{timestamp_with_tz_string},"
+                                  f"{processed_line}")
             else:
                 processed_line = line
-            data_lines.append(processed_line)
+                data_lines.append(processed_line)
     file_name_base = filename
     # header lines can't reliably be parsed, use short names
     data_lines.insert(0,
+                      "timestamp," +
                       header_footer_lines[0][-3][19:].strip().replace(" ", ",")
                       + "\n")
     base_path = f"{site}/{measurement_type}_processed/{filename}"
-    
+
     # TODO: DRY up/ partial function application
     s3.put_object(Bucket=bucket, Key=f"{base_path}.header.txt",
               Body="".join(header_footer_lines[0]))
@@ -51,7 +68,7 @@ def lambda_handler(event, context):
         print(f"Unable to split into site and type, key was f{key}.")
         logging.exception(f"Unable to split into site and type, key was f{key}.")
         raise
-    # avoid looping on S3 file 
+    # avoid looping on S3 file
     if measurement_type.endswith("processed"):
         return
     try:
