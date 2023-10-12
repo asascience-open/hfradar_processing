@@ -35,7 +35,10 @@ async def async_sync_site(site: str):
                                           bucket.objects.filter(Prefix=prefix)}
 
                     async def maybe_write_to_s3(sftp_file_name):
-                      if sftp_file_name not in file_metadata_dict:
+                      # TODO: refine logic to handle datasets which might
+                      # already exist but have different mtime or size
+                      if (sftp_file_name not in file_metadata_dict and
+                          sftp_file_name.endswith(".ruv")):
                          try:
                              async with sftp.open(sftp_file_name) as fh:
                                 body_contents = await fh.read()
