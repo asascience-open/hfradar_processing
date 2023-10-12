@@ -1,49 +1,56 @@
-import paramiko
-import boto3
-import sys
-from io import StringIO
+import asyncio
+import aiohttp
+import aioboto3
+import asyncssh
 import logging
+import sys
 
-def sync_site(site: str):
-    ssm = boto3.client("ssm")
-    username, host, directory, password = [param_dict["Value"] for param_dict
-                                    in (ssm.get_parameters(Names=[f"/hfradar/sprk/{param_name}"
-                                    for param_name in ("SSH_USER", "SSH_HOST",
-                                    "SSH_DIR", "SSHPASS")], WithDecryption=True)
-                                    ["Parameters"][::-1])]
-    # TODO: allow port customization
-    transport = paramiko.Transport((host, 22))
-    transport.connect(username=username, password=password)
-    sftp = paramiko.sftp_client.SFTPClient.from_transport(transport)
-    s3 = boto3.client("s3")
-    # TODO: possibly add datetime limiter to avoid iterating over all files
-    # if datetime format in filenames is consistently applied
-    for subdirectory in ["MeasPattern", "IdealPattern"]:
-        try:
-            sftp_search_location = "{directory}/{subdirectory}"
-            sftp.chdir(f"{directory}/{subdirectory}")
-            sftp_file_names = set(sftp.listdir())
-        # TODO: refine exception classes
-        except:
-            logging.exception(f"{sftp_search_location} failed to list files "
-                              "for site {site}, possibly due to nonexistent directory")
-            continue
-        try:
-            file_metadata_dict = {file_dict["Key"].rsplit("/")[-1]: file_dict for
-                                  file_dict in s3.list_objects(Bucket="hfradar",
-                                  Prefix=f"{site}/{subdirectory}/")["Contents"]}
-        # if a subpath doesn't exist for the particular site, it will soon
-        except:
-            file_metadata_dict = {}
-        for sftp_file_name in sftp_file_names:
-            if sftp_file_name not in file_metadata_dict:
-                fh = sftp.file(sftp_file_name)
-                logging.info(f"Wrote {sftp_file_name} to S3")
-                s3.put_object(Body=fh, Bucket="hfradar",
-                              Key=f"{site}/{subdirectory}/{sftp_file_name}")
+async def async_sync_site(site: str):
+    session = aioboto3.Session()
+    async with session.client("ssm", region_name="us-east-1") as ssm:
+        ssm_params = await ssm.get_parameters(Names=[f"/hfradar/sprk/{param_name}" for param_name in ("SSH_USER", "SSH_HOST", "SSH_DIR", "SSHPASS")], WithDecryption=True)
+        username, host, directory, password = [param["Value"] for param in ssm_params["Parameters"][::-1]]
+    # TODO: how to close session?
+    del session
+
+    async with asyncssh.connect(host, username=username, password=password,
+                                known_hosts=None) as conn:  # TOFU for now
+        async with conn.start_sftp_client() as sftp:
+
+            for subdirectory in ["MeasPattern", "IdealPattern"]:
+                try:
+                    sftp_search_location = f"{directory}/{subdirectory}"
+                    await sftp.chdir(f"{directory}/{subdirectory}")
+                    sftp_file_names = set(await sftp.listdir())
+                except (OSError, asyncssh.SFTPError) as e:
+                    logging.exception(f"{sftp_search_location} failed to list files for site {site}, possibly due to nonexistent directory")
+                    continue
+
+                session = aioboto3.Session()
+                async with session.resource("s3") as s3:
+                    bucket = await s3.Bucket("hfradar")
+                    prefix = f"/{site}/{subdirectory}/"
+
+                    file_metadata_dict = {obj.key.rsplit("/")[-1]: obj async for obj in
+                                          bucket.objects.filter(Prefix=prefix)}
+
+                    async def maybe_write_to_s3(sftp_file_name):
+                      if sftp_file_name not in file_metadata_dict:
+                         try:
+                             async with sftp.open(sftp_file_name) as fh:
+                                body_contents = await fh.read()
+                                print(body_contents)
+                                await bucket.put_object(Key=f"{prefix}{sftp_file_name}", Body=body_contents)
+                                print(f"Wrote {sftp_file_name} to HF Radar S3 location {prefix}{sftp_file_name}")
+                                logging.info(f"Wrote {sftp_file_name} to S3")
+                         except:
+                             logging.exception(f"Exception occurred while trying to transfer file {sftp_file_name} to S3: ")
+
+                    await asyncio.gather(*(maybe_write_to_s3(sftp_file_name) for sftp_file_name in
+                                           sftp_file_names))
 
 def main():
-    sync_site(sys.argv[1])
+    asyncio.run(async_sync_site(sys.argv[1]))
 
 if __name__ == "__main__":
     main()
