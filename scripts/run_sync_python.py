@@ -29,7 +29,7 @@ async def async_sync_site(site: str):
                 session = aioboto3.Session()
                 async with session.resource("s3") as s3:
                     bucket = await s3.Bucket("hfradar")
-                    prefix = f"/{site}/{subdirectory}/"
+                    prefix = f"{site}/{subdirectory}/"
 
                     file_metadata_dict = {obj.key.rsplit("/")[-1]: obj async for obj in
                                           bucket.objects.filter(Prefix=prefix)}
