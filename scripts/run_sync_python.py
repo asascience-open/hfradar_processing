@@ -39,10 +39,8 @@ async def async_sync_site(site: str):
                          try:
                              async with sftp.open(sftp_file_name) as fh:
                                 body_contents = await fh.read()
-                                print(body_contents)
                                 await bucket.put_object(Key=f"{prefix}{sftp_file_name}", Body=body_contents)
                                 print(f"Wrote {sftp_file_name} to HF Radar S3 location {prefix}{sftp_file_name}")
-                                logging.info(f"Wrote {sftp_file_name} to S3")
                          except:
                              logging.exception(f"Exception occurred while trying to transfer file {sftp_file_name} to S3: ")
 
