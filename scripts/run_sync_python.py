@@ -1,5 +1,4 @@
 import asyncio
-import aiohttp
 import aioboto3
 import asyncssh
 import logging
