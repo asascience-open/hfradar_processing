@@ -4,6 +4,10 @@ import asyncssh
 import logging
 import sys
 
+import logging
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
 async def async_sync_site(site: str):
     session = aioboto3.Session()
     async with session.client("ssm", region_name="us-east-1") as ssm:
@@ -22,7 +26,7 @@ async def async_sync_site(site: str):
                     await sftp.chdir(f"{directory}/{subdirectory}")
                     sftp_file_names = set(await sftp.listdir())
                 except (OSError, asyncssh.SFTPError) as e:
-                    logging.exception(f"{sftp_search_location} failed to list files for site {site}, possibly due to nonexistent directory")
+                    logger.exception(f"{sftp_search_location} failed to list files for site {site}, possibly due to nonexistent directory")
                     continue
 
                 session = aioboto3.Session()
@@ -42,9 +46,9 @@ async def async_sync_site(site: str):
                              async with sftp.open(sftp_file_name) as fh:
                                 body_contents = await fh.read()
                                 await bucket.put_object(Key=f"{prefix}{sftp_file_name}", Body=body_contents)
-                                print(f"Wrote {sftp_file_name} to HF Radar S3 location {prefix}{sftp_file_name}")
+                                logger.info(f"Wrote {sftp_file_name} to HF Radar S3 location {prefix}{sftp_file_name}")
                          except:
-                             logging.exception(f"Exception occurred while trying to transfer file {sftp_file_name} to S3: ")
+                             logger.exception(f"Exception occurred while trying to transfer file {sftp_file_name} to S3: ")
 
                     await asyncio.gather(*(maybe_write_to_s3(sftp_file_name) for sftp_file_name in
                                            sftp_file_names))
